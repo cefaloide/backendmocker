@@ -1,5 +1,9 @@
 # Backend Mocker User Manual
 
+<p align="center">
+  <img src="icons/logo.png" alt="Backend Mocker logo" width="220" />
+</p>
+
 Backend Mocker is a Chrome extension that intercepts matching requests and
 returns mock responses from local rules.
 

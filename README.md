@@ -1,5 +1,9 @@
 # backendmocker
 
+<p align="center">
+	<img src="icons/logo.png" alt="Backend Mocker logo" width="220" />
+</p>
+
 Chrome Extension (Manifest V3) that mocks HTTP API responses in-browser using
 dynamic `chrome.declarativeNetRequest` rules.
 
