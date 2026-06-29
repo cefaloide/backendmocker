@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Backend Mocker - Rules Dashboard</title>
+    <link
+      rel="stylesheet"
+      href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css"
+    />
+    <link rel="stylesheet" href="options.css" />
+  </head>
+  <body class="min-h-screen bg-slate-100 text-slate-900">
+    <main class="max-w-6xl mx-auto p-6 lg:p-8 space-y-6">
+      <header class="space-y-2">
+        <h1 class="text-2xl font-semibold">Backend Mocker Dashboard</h1>
+        <p class="text-sm text-slate-600">
+          Create, edit, enable, and delete API mock rules.
+        </p>
+        <p
+          id="engineHint"
+          class="inline-flex items-center rounded-md border border-slate-300 px-3 py-1 text-xs text-slate-600 bg-white"
+        >
+          Global engine status: loading...
+        </p>
+      </header>
+
+      <section class="bg-white border border-slate-200 rounded-xl shadow-sm">
+        <div class="border-b border-slate-200 px-6 py-4">
+          <h2 id="formTitle" class="text-lg font-medium">Create mock rule</h2>
+          <p class="text-xs text-slate-500 mt-1">
+            URL patterns support wildcard syntax (for example:
+            <code class="bg-slate-100 px-1 rounded">*://api.example.com/users/*</code>).
+          </p>
+        </div>
+
+        <form id="ruleForm" class="p-6 space-y-4">
+          <input type="hidden" id="ruleId" name="ruleId" />
+
+          <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            <label class="space-y-1">
+              <span class="text-sm font-medium">Rule name</span>
+              <input
+                id="name"
+                name="name"
+                type="text"
+                placeholder="Get todo #1 mock"
+                class="w-full rounded-md border-slate-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
+              />
+            </label>
+
+            <label class="space-y-1">
+              <span class="text-sm font-medium">HTTP method</span>
+              <select
+                id="method"
+                name="method"
+                class="w-full rounded-md border-slate-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
+              >
+                <option value="ANY">ANY</option>
+                <option value="GET">GET</option>
+                <option value="POST">POST</option>
+                <option value="PUT">PUT</option>
+                <option value="PATCH">PATCH</option>
+                <option value="DELETE">DELETE</option>
+                <option value="HEAD">HEAD</option>
+                <option value="OPTIONS">OPTIONS</option>
+              </select>
+            </label>
+          </div>
+
+          <label class="space-y-1 block">
+            <span class="text-sm font-medium">URL pattern</span>
+            <input
+              id="urlPattern"
+              name="urlPattern"
+              type="text"
+              required
+              placeholder="https://jsonplaceholder.typicode.com/todos/1"
+              class="w-full rounded-md border-slate-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
+            />
+          </label>
+
+          <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            <label class="space-y-1">
+              <span class="text-sm font-medium">HTTP status code</span>
+              <input
+                id="statusCode"
+                name="statusCode"
+                type="number"
+                min="100"
+                max="599"
+                value="200"
+                required
+                class="w-full rounded-md border-slate-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
+              />
+            </label>
+
+            <label class="space-y-1">
+              <span class="text-sm font-medium">Enabled</span>
+              <select
+                id="enabled"
+                name="enabled"
+                class="w-full rounded-md border-slate-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
+              >
+                <option value="true">Enabled</option>
+                <option value="false">Disabled</option>
+              </select>
+            </label>
+          </div>
+
+          <label class="space-y-1 block">
+            <span class="text-sm font-medium">Response headers (JSON object)</span>
+            <textarea
+              id="headers"
+              name="headers"
+              rows="4"
+              class="w-full rounded-md border-slate-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 font-mono text-sm"
+              placeholder='{"Content-Type":"application/json"}'
+            ></textarea>
+          </label>
+
+          <label class="space-y-1 block">
+            <span class="text-sm font-medium">Response body</span>
+            <textarea
+              id="body"
+              name="body"
+              rows="8"
+              class="w-full rounded-md border-slate-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 font-mono text-sm"
+              placeholder='{"mocked": true}'
+            ></textarea>
+          </label>
+
+          <p
+            id="formError"
+            class="hidden text-sm text-red-700 bg-red-50 border border-red-200 rounded-md px-3 py-2"
+          ></p>
+
+          <div class="flex flex-wrap items-center gap-3">
+            <button
+              type="submit"
+              class="rounded-md bg-blue-600 text-white px-4 py-2 text-sm font-medium hover:bg-blue-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+            >
+              Save rule
+            </button>
+            <button
+              id="cancelEdit"
+              type="button"
+              class="rounded-md border border-slate-300 px-4 py-2 text-sm font-medium hover:bg-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
+            >
+              Cancel edit
+            </button>
+          </div>
+        </form>
+      </section>
+
+      <section class="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden">
+        <div class="border-b border-slate-200 px-6 py-4">
+          <h2 class="text-lg font-medium">Configured rules</h2>
+        </div>
+
+        <div class="overflow-x-auto">
+          <table class="min-w-full divide-y divide-slate-200">
+            <thead class="bg-slate-50">
+              <tr>
+                <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  Rule
+                </th>
+                <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  Match
+                </th>
+                <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  Response
+                </th>
+                <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  State
+                </th>
+                <th class="px-4 py-3 text-right text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  Actions
+                </th>
+              </tr>
+            </thead>
+            <tbody id="rulesTableBody" class="divide-y divide-slate-200 bg-white"></tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+
+    <script src="options.js"></script>
+  </body>
+</html>
