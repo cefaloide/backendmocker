@@ -1,17 +1,27 @@
 const STORAGE_KEYS = {
   RULES: "mockRules",
   ENGINE_ENABLED: "engineEnabled",
+  CAPTURE_COUNT: "capturedCallsCount",
 };
 
 const SUPPORTED_RESOURCE_TYPES = ["main_frame", "sub_frame", "xmlhttprequest"];
+const MATCH_DEDUP_TTL_MS = 15_000;
+const ACTION_ICON_SOURCE_PATH = "icons/icon128.png";
+const ACTION_ICON_SIZES = [16, 32];
 
 let activeSyncPromise = null;
 let pendingSyncRequested = false;
+let captureCountCache = null;
+let captureCountWriteQueue = Promise.resolve();
+let actionIconBitmapPromise = null;
+
+const recentMatchedRequests = new Map();
 
 chrome.runtime.onInstalled.addListener(async () => {
   const current = await chrome.storage.local.get([
     STORAGE_KEYS.RULES,
     STORAGE_KEYS.ENGINE_ENABLED,
+    STORAGE_KEYS.CAPTURE_COUNT,
   ]);
 
   const nextState = {};
@@ -24,15 +34,35 @@ chrome.runtime.onInstalled.addListener(async () => {
     nextState[STORAGE_KEYS.ENGINE_ENABLED] = true;
   }
 
+  if (!isValidCaptureCount(current[STORAGE_KEYS.CAPTURE_COUNT])) {
+    nextState[STORAGE_KEYS.CAPTURE_COUNT] = 0;
+  }
+
+  captureCountCache = normalizeCaptureCount(
+    current[STORAGE_KEYS.CAPTURE_COUNT],
+  );
+
   if (Object.keys(nextState).length > 0) {
     await chrome.storage.local.set(nextState);
+
+    if (
+      Object.prototype.hasOwnProperty.call(
+        nextState,
+        STORAGE_KEYS.CAPTURE_COUNT,
+      )
+    ) {
+      captureCountCache = nextState[STORAGE_KEYS.CAPTURE_COUNT];
+    }
   }
 
   await syncDynamicRules();
+  await updateActionBadge(captureCountCache);
 });
 
 chrome.runtime.onStartup.addListener(async () => {
   await syncDynamicRules();
+  const captureCount = await getCaptureCount();
+  await updateActionBadge(captureCount);
 });
 
 chrome.storage.onChanged.addListener(async (changes, areaName) => {
@@ -42,6 +72,13 @@ chrome.storage.onChanged.addListener(async (changes, areaName) => {
 
   if (changes[STORAGE_KEYS.RULES] || changes[STORAGE_KEYS.ENGINE_ENABLED]) {
     await syncDynamicRules();
+  }
+
+  if (changes[STORAGE_KEYS.CAPTURE_COUNT]) {
+    captureCountCache = normalizeCaptureCount(
+      changes[STORAGE_KEYS.CAPTURE_COUNT].newValue,
+    );
+    await updateActionBadge(captureCountCache);
   }
 });
 
@@ -72,8 +109,31 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return true;
   }
 
+  if (message.type === "GET_CAPTURE_COUNT") {
+    getCaptureCount()
+      .then((count) => sendResponse({ ok: true, count }))
+      .catch((error) => {
+        console.error("Failed to read captured calls counter:", error);
+        sendResponse({ ok: false, error: error.message });
+      });
+    return true;
+  }
+
+  if (message.type === "RESET_CAPTURE_COUNT") {
+    queueCaptureCountUpdate(() => 0)
+      .then((count) => sendResponse({ ok: true, count }))
+      .catch((error) => {
+        console.error("Failed to reset captured calls counter:", error);
+        sendResponse({ ok: false, error: error.message });
+      });
+    return true;
+  }
+
   return false;
 });
+
+registerRuleMatchedListener();
+void initializeActionBadge();
 
 async function syncDynamicRules() {
   pendingSyncRequested = true;
@@ -322,4 +382,260 @@ function wildcardToRegex(pattern) {
   const escapedPattern = pattern.replace(/[.+?^${}()|[\]\\]/g, "\\$&");
   const wildcardPattern = escapedPattern.replace(/\*/g, ".*");
   return `^${wildcardPattern}$`;
+}
+
+function isValidCaptureCount(value) {
+  return Number.isInteger(value) && value >= 0;
+}
+
+function normalizeCaptureCount(value) {
+  return isValidCaptureCount(value) ? value : 0;
+}
+
+function formatBadgeText(count) {
+  if (count <= 0) {
+    return "";
+  }
+
+  if (count > 999) {
+    return "999+";
+  }
+
+  return String(count);
+}
+
+async function getCaptureCount() {
+  if (isValidCaptureCount(captureCountCache)) {
+    return captureCountCache;
+  }
+
+  const state = await chrome.storage.local.get(STORAGE_KEYS.CAPTURE_COUNT);
+  captureCountCache = normalizeCaptureCount(state[STORAGE_KEYS.CAPTURE_COUNT]);
+  return captureCountCache;
+}
+
+function queueCaptureCountUpdate(updateFn) {
+  captureCountWriteQueue = captureCountWriteQueue
+    .catch(() => undefined)
+    .then(async () => {
+      const currentCount = await getCaptureCount();
+      const nextCount = normalizeCaptureCount(updateFn(currentCount));
+
+      captureCountCache = nextCount;
+      await chrome.storage.local.set({
+        [STORAGE_KEYS.CAPTURE_COUNT]: nextCount,
+      });
+      await updateActionBadge(nextCount);
+
+      return nextCount;
+    });
+
+  return captureCountWriteQueue;
+}
+
+async function updateActionBadge(count) {
+  const normalizedCount = normalizeCaptureCount(count);
+
+  if (canDrawCounterInActionIcon()) {
+    try {
+      const imageData = await createActionIconImageData(normalizedCount);
+      await chrome.action.setIcon({ imageData });
+      await chrome.action.setBadgeText({ text: "" });
+      return;
+    } catch (error) {
+      console.error(
+        "Failed to render counter in action icon. Falling back to badge text:",
+        error,
+      );
+    }
+  }
+
+  await chrome.action.setBadgeBackgroundColor({ color: "#0f766e" });
+  await chrome.action.setBadgeText({ text: formatBadgeText(normalizedCount) });
+}
+
+async function initializeActionBadge() {
+  try {
+    const captureCount = await getCaptureCount();
+    await updateActionBadge(captureCount);
+  } catch (error) {
+    console.error("Failed to initialize action badge:", error);
+  }
+}
+
+function registerRuleMatchedListener() {
+  const ruleMatchedEvent = chrome.declarativeNetRequest?.onRuleMatchedDebug;
+  if (!ruleMatchedEvent) {
+    return;
+  }
+
+  ruleMatchedEvent.addListener((matchInfo) => {
+    if (!shouldCountRuleMatch(matchInfo)) {
+      return;
+    }
+
+    void queueCaptureCountUpdate((currentCount) => currentCount + 1).catch(
+      (error) => {
+        console.error("Failed to increment captured calls counter:", error);
+      },
+    );
+  });
+}
+
+function shouldCountRuleMatch(matchInfo) {
+  const request = matchInfo?.request;
+  if (!request || typeof request !== "object") {
+    return true;
+  }
+
+  const requestKey = buildRequestKey(matchInfo, request);
+  if (!requestKey) {
+    return true;
+  }
+
+  const now = Date.now();
+
+  for (const [key, timestamp] of recentMatchedRequests.entries()) {
+    if (now - timestamp > MATCH_DEDUP_TTL_MS) {
+      recentMatchedRequests.delete(key);
+    }
+  }
+
+  if (recentMatchedRequests.has(requestKey)) {
+    return false;
+  }
+
+  recentMatchedRequests.set(requestKey, now);
+  return true;
+}
+
+function buildRequestKey(matchInfo, request) {
+  if (typeof request.requestId === "string" && request.requestId) {
+    return `${request.requestId}:${request.tabId ?? -1}:${request.frameId ?? -1}`;
+  }
+
+  if (typeof request.url === "string" && request.url) {
+    const timeBucket = Math.floor(
+      Number(matchInfo?.timeStamp ?? Date.now()) / 100,
+    );
+    return `${request.method ?? "ANY"}:${request.url}:${timeBucket}`;
+  }
+
+  return null;
+}
+
+function canDrawCounterInActionIcon() {
+  return (
+    typeof OffscreenCanvas !== "undefined" &&
+    typeof createImageBitmap === "function"
+  );
+}
+
+async function getActionIconBitmap() {
+  if (!actionIconBitmapPromise) {
+    actionIconBitmapPromise = (async () => {
+      const iconUrl = chrome.runtime.getURL(ACTION_ICON_SOURCE_PATH);
+      const response = await fetch(iconUrl);
+
+      if (!response.ok) {
+        throw new Error(`Could not load icon from ${ACTION_ICON_SOURCE_PATH}`);
+      }
+
+      const blob = await response.blob();
+      return createImageBitmap(blob);
+    })();
+  }
+
+  return actionIconBitmapPromise;
+}
+
+async function createActionIconImageData(count) {
+  const normalizedCount = normalizeCaptureCount(count);
+  const baseIconBitmap = await getActionIconBitmap();
+  const imageData = {};
+
+  for (const size of ACTION_ICON_SIZES) {
+    const canvas = new OffscreenCanvas(size, size);
+    const context = canvas.getContext("2d", { alpha: true });
+
+    if (!context) {
+      throw new Error("Could not create 2D context for action icon rendering.");
+    }
+
+    context.clearRect(0, 0, size, size);
+    context.drawImage(baseIconBitmap, 0, 0, size, size);
+    drawCounterBubble(context, size, normalizedCount);
+
+    imageData[size] = context.getImageData(0, 0, size, size);
+  }
+
+  return imageData;
+}
+
+function drawCounterBubble(context, iconSize, count) {
+  if (count <= 0) {
+    return;
+  }
+
+  const bubbleText = formatIconCounterText(count, iconSize);
+  if (!bubbleText) {
+    return;
+  }
+
+  const bubbleDiameter = iconSize <= 16 ? 11 : 20;
+  const bubbleRadius = bubbleDiameter / 2;
+  const centerX = iconSize - bubbleRadius;
+  const centerY = bubbleRadius;
+
+  context.beginPath();
+  context.fillStyle = "#dc2626";
+  context.arc(centerX, centerY, bubbleRadius, 0, Math.PI * 2);
+  context.fill();
+
+  context.lineWidth = Math.max(1, Math.round(iconSize * 0.06));
+  context.strokeStyle = "#ffffff";
+  context.stroke();
+
+  const fontSize = resolveIconCounterFontSize(iconSize, bubbleText.length);
+  context.fillStyle = "#ffffff";
+  context.textAlign = "center";
+  context.textBaseline = "middle";
+  context.font = `700 ${fontSize}px sans-serif`;
+  context.fillText(bubbleText, centerX, centerY + (iconSize <= 16 ? 0.5 : 0));
+}
+
+function formatIconCounterText(count, iconSize) {
+  if (count <= 0) {
+    return "";
+  }
+
+  if (count <= 99) {
+    return String(count);
+  }
+
+  return iconSize <= 16 ? "99" : "99+";
+}
+
+function resolveIconCounterFontSize(iconSize, textLength) {
+  if (iconSize <= 16) {
+    if (textLength >= 3) {
+      return 6;
+    }
+
+    if (textLength === 2) {
+      return 7;
+    }
+
+    return 8;
+  }
+
+  if (textLength >= 3) {
+    return 10;
+  }
+
+  if (textLength === 2) {
+    return 12;
+  }
+
+  return 14;
 }
