@@ -14,6 +14,7 @@ let pendingSyncRequested = false;
 let captureCountCache = null;
 let captureCountWriteQueue = Promise.resolve();
 let actionIconBitmapPromise = null;
+let engineEnabledCache = null;
 
 const recentMatchedRequests = new Map();
 
@@ -41,6 +42,7 @@ chrome.runtime.onInstalled.addListener(async () => {
   captureCountCache = normalizeCaptureCount(
     current[STORAGE_KEYS.CAPTURE_COUNT],
   );
+  engineEnabledCache = current[STORAGE_KEYS.ENGINE_ENABLED] !== false;
 
   if (Object.keys(nextState).length > 0) {
     await chrome.storage.local.set(nextState);
@@ -61,7 +63,9 @@ chrome.runtime.onInstalled.addListener(async () => {
 
 chrome.runtime.onStartup.addListener(async () => {
   await syncDynamicRules();
+  const engineEnabled = await getEngineEnabled();
   const captureCount = await getCaptureCount();
+  engineEnabledCache = engineEnabled;
   await updateActionBadge(captureCount);
 });
 
@@ -72,6 +76,13 @@ chrome.storage.onChanged.addListener(async (changes, areaName) => {
 
   if (changes[STORAGE_KEYS.RULES] || changes[STORAGE_KEYS.ENGINE_ENABLED]) {
     await syncDynamicRules();
+  }
+
+  if (changes[STORAGE_KEYS.ENGINE_ENABLED]) {
+    engineEnabledCache =
+      changes[STORAGE_KEYS.ENGINE_ENABLED].newValue !== false;
+    const captureCount = await getCaptureCount();
+    await updateActionBadge(captureCount);
   }
 
   if (changes[STORAGE_KEYS.CAPTURE_COUNT]) {
@@ -414,6 +425,16 @@ async function getCaptureCount() {
   return captureCountCache;
 }
 
+async function getEngineEnabled() {
+  if (typeof engineEnabledCache === "boolean") {
+    return engineEnabledCache;
+  }
+
+  const state = await chrome.storage.local.get(STORAGE_KEYS.ENGINE_ENABLED);
+  engineEnabledCache = state[STORAGE_KEYS.ENGINE_ENABLED] !== false;
+  return engineEnabledCache;
+}
+
 function queueCaptureCountUpdate(updateFn) {
   captureCountWriteQueue = captureCountWriteQueue
     .catch(() => undefined)
@@ -435,10 +456,14 @@ function queueCaptureCountUpdate(updateFn) {
 
 async function updateActionBadge(count) {
   const normalizedCount = normalizeCaptureCount(count);
+  const engineEnabled = await getEngineEnabled();
 
   if (canDrawCounterInActionIcon()) {
     try {
-      const imageData = await createActionIconImageData(normalizedCount);
+      const imageData = await createActionIconImageData(
+        normalizedCount,
+        engineEnabled,
+      );
       await chrome.action.setIcon({ imageData });
       await chrome.action.setBadgeText({ text: "" });
       return;
@@ -450,7 +475,9 @@ async function updateActionBadge(count) {
     }
   }
 
-  await chrome.action.setBadgeBackgroundColor({ color: "#0f766e" });
+  await chrome.action.setBadgeBackgroundColor({
+    color: engineEnabled ? "#0f766e" : "#6b7280",
+  });
   await chrome.action.setBadgeText({ text: formatBadgeText(normalizedCount) });
 }
 
@@ -549,8 +576,9 @@ async function getActionIconBitmap() {
   return actionIconBitmapPromise;
 }
 
-async function createActionIconImageData(count) {
+async function createActionIconImageData(count, engineEnabled) {
   const normalizedCount = normalizeCaptureCount(count);
+  const shouldRenderGrayscale = !engineEnabled;
   const baseIconBitmap = await getActionIconBitmap();
   const imageData = {};
 
@@ -565,6 +593,10 @@ async function createActionIconImageData(count) {
     context.clearRect(0, 0, size, size);
     context.drawImage(baseIconBitmap, 0, 0, size, size);
     drawCounterBubble(context, size, normalizedCount);
+
+    if (shouldRenderGrayscale) {
+      applyGrayscaleFilter(context, size);
+    }
 
     imageData[size] = context.getImageData(0, 0, size, size);
   }
@@ -638,4 +670,22 @@ function resolveIconCounterFontSize(iconSize, textLength) {
   }
 
   return 14;
+}
+
+function applyGrayscaleFilter(context, iconSize) {
+  const pixels = context.getImageData(0, 0, iconSize, iconSize);
+  const data = pixels.data;
+
+  for (let i = 0; i < data.length; i += 4) {
+    const r = data[i];
+    const g = data[i + 1];
+    const b = data[i + 2];
+    const luminance = Math.round(0.299 * r + 0.587 * g + 0.114 * b);
+
+    data[i] = luminance;
+    data[i + 1] = luminance;
+    data[i + 2] = luminance;
+  }
+
+  context.putImageData(pixels, 0, 0);
 }
