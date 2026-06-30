@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "Backend Mocker",
+  "name": "BackendMocker",
   "description": "Mock API responses directly in Chrome with configurable rules.",
   "version": "0.1.0",
   "permissions": [
@@ -15,7 +15,7 @@
     "service_worker": "background.js"
   },
   "action": {
-    "default_title": "Backend Mocker",
+    "default_title": "BackendMocker",
     "default_popup": "popup/popup.html",
     "default_icon": {
       "16": "icons/icon16.png",

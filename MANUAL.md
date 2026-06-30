@@ -1,10 +1,10 @@
-# Backend Mocker User Manual
+# BackendMocker User Manual
 
 <p align="center">
-  <img src="icons/logo.png" alt="Backend Mocker logo" width="220" />
+  <img src="icons/logo.png" alt="BackendMocker logo" width="220" />
 </p>
 
-Backend Mocker is a Chrome extension that intercepts matching requests and
+BackendMocker is a Chrome extension that intercepts matching requests and
 returns mock responses from local rules.
 
 ## 1. Install the extension
@@ -112,7 +112,7 @@ The popup switch controls all rules at once:
 
 ## 9. Response details and limitations
 
-Backend Mocker uses Manifest V3 declarativeNetRequest redirects to `data:` URLs.
+BackendMocker uses Manifest V3 declarativeNetRequest redirects to `data:` URLs.
 
 What this means:
 
