@@ -1,12 +1,14 @@
 const STORAGE_KEYS = {
   RULES: "mockRules",
   ENGINE_ENABLED: "engineEnabled",
+  CAPTURE_COUNT_BY_RULE: "capturedCallsCountByRule",
 };
 
 const state = {
   rules: [],
   editingRuleId: null,
   engineEnabled: true,
+  captureCountByRule: {},
 };
 
 const elements = {};
@@ -16,6 +18,19 @@ document.addEventListener("DOMContentLoaded", async () => {
   wireEvents();
   await loadState();
   render();
+});
+
+chrome.storage.onChanged.addListener((changes, areaName) => {
+  if (areaName !== "local") {
+    return;
+  }
+
+  if (changes[STORAGE_KEYS.CAPTURE_COUNT_BY_RULE]) {
+    state.captureCountByRule = normalizeCaptureCountByRule(
+      changes[STORAGE_KEYS.CAPTURE_COUNT_BY_RULE].newValue,
+    );
+    renderRulesTable();
+  }
 });
 
 function cacheElements() {
@@ -45,12 +60,16 @@ async function loadState() {
   const result = await chrome.storage.local.get([
     STORAGE_KEYS.RULES,
     STORAGE_KEYS.ENGINE_ENABLED,
+    STORAGE_KEYS.CAPTURE_COUNT_BY_RULE,
   ]);
 
   state.rules = Array.isArray(result[STORAGE_KEYS.RULES])
     ? result[STORAGE_KEYS.RULES]
     : [];
   state.engineEnabled = result[STORAGE_KEYS.ENGINE_ENABLED] !== false;
+  state.captureCountByRule = normalizeCaptureCountByRule(
+    result[STORAGE_KEYS.CAPTURE_COUNT_BY_RULE],
+  );
 }
 
 function render() {
@@ -107,11 +126,15 @@ function renderRulesTable() {
       const safePattern = escapeHtml(rule.urlPattern || "");
       const safeStatus = escapeHtml(String(rule.statusCode || 200));
       const isEnabled = rule.enabled !== false;
+      const capturedCalls = normalizeCaptureCount(
+        state.captureCountByRule?.[rule.id],
+      );
 
       return `
         <tr data-rule-id="${escapeHtml(rule.id)}">
           <td class="px-4 py-3 align-top">
             <p class="text-sm font-medium text-slate-900">${safeName}</p>
+            <p class="text-xs text-slate-500 mt-1">Captured calls: ${capturedCalls}</p>
           </td>
           <td class="px-4 py-3 align-top">
             <p class="text-xs text-slate-500">${safeMethod}</p>
@@ -364,4 +387,30 @@ function escapeHtml(value) {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#039;");
+}
+
+function normalizeCaptureCount(value) {
+  if (Number.isInteger(value) && value >= 0) {
+    return value;
+  }
+
+  return 0;
+}
+
+function normalizeCaptureCountByRule(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {};
+  }
+
+  const normalized = {};
+
+  for (const [ruleId, count] of Object.entries(value)) {
+    if (!ruleId) {
+      continue;
+    }
+
+    normalized[ruleId] = normalizeCaptureCount(count);
+  }
+
+  return normalized;
 }

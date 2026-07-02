@@ -2,6 +2,7 @@ const STORAGE_KEYS = {
   RULES: "mockRules",
   ENGINE_ENABLED: "engineEnabled",
   CAPTURE_COUNT: "capturedCallsCount",
+  CAPTURE_COUNT_BY_RULE: "capturedCallsCountByRule",
 };
 
 const SUPPORTED_RESOURCE_TYPES = ["main_frame", "sub_frame", "xmlhttprequest"];
@@ -12,9 +13,13 @@ const ACTION_ICON_SIZES = [16, 32];
 let activeSyncPromise = null;
 let pendingSyncRequested = false;
 let captureCountCache = null;
+let captureCountByRuleCache = null;
 let captureCountWriteQueue = Promise.resolve();
 let actionIconBitmapPromise = null;
 let engineEnabledCache = null;
+let dynamicRuleIdToSourceRuleId = new Map();
+let syncedEnabledRules = [];
+let ensureRuleMatchContextPromise = null;
 
 const recentMatchedRequests = new Map();
 
@@ -23,6 +28,7 @@ chrome.runtime.onInstalled.addListener(async () => {
     STORAGE_KEYS.RULES,
     STORAGE_KEYS.ENGINE_ENABLED,
     STORAGE_KEYS.CAPTURE_COUNT,
+    STORAGE_KEYS.CAPTURE_COUNT_BY_RULE,
   ]);
 
   const nextState = {};
@@ -39,8 +45,15 @@ chrome.runtime.onInstalled.addListener(async () => {
     nextState[STORAGE_KEYS.CAPTURE_COUNT] = 0;
   }
 
+  if (!isValidCaptureCountByRule(current[STORAGE_KEYS.CAPTURE_COUNT_BY_RULE])) {
+    nextState[STORAGE_KEYS.CAPTURE_COUNT_BY_RULE] = {};
+  }
+
   captureCountCache = normalizeCaptureCount(
     current[STORAGE_KEYS.CAPTURE_COUNT],
+  );
+  captureCountByRuleCache = normalizeCaptureCountByRule(
+    current[STORAGE_KEYS.CAPTURE_COUNT_BY_RULE],
   );
   engineEnabledCache = current[STORAGE_KEYS.ENGINE_ENABLED] !== false;
 
@@ -54,6 +67,15 @@ chrome.runtime.onInstalled.addListener(async () => {
       )
     ) {
       captureCountCache = nextState[STORAGE_KEYS.CAPTURE_COUNT];
+    }
+
+    if (
+      Object.prototype.hasOwnProperty.call(
+        nextState,
+        STORAGE_KEYS.CAPTURE_COUNT_BY_RULE,
+      )
+    ) {
+      captureCountByRuleCache = nextState[STORAGE_KEYS.CAPTURE_COUNT_BY_RULE];
     }
   }
 
@@ -90,6 +112,12 @@ chrome.storage.onChanged.addListener(async (changes, areaName) => {
       changes[STORAGE_KEYS.CAPTURE_COUNT].newValue,
     );
     await updateActionBadge(captureCountCache);
+  }
+
+  if (changes[STORAGE_KEYS.CAPTURE_COUNT_BY_RULE]) {
+    captureCountByRuleCache = normalizeCaptureCountByRule(
+      changes[STORAGE_KEYS.CAPTURE_COUNT_BY_RULE].newValue,
+    );
   }
 });
 
@@ -131,7 +159,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
 
   if (message.type === "RESET_CAPTURE_COUNT") {
-    queueCaptureCountUpdate(() => 0)
+    queueCaptureCountersUpdate(() => ({ count: 0, countByRule: {} }))
       .then((count) => sendResponse({ ok: true, count }))
       .catch((error) => {
         console.error("Failed to reset captured calls counter:", error);
@@ -179,8 +207,10 @@ async function performDynamicRulesSync() {
   const enabledRules = engineEnabled
     ? allRules.filter((rule) => Boolean(rule.enabled))
     : [];
+  syncedEnabledRules = enabledRules;
 
-  const dynamicRules = compileDynamicRules(enabledRules);
+  const { dynamicRules, ruleIdMap } = compileDynamicRules(enabledRules);
+  dynamicRuleIdToSourceRuleId = ruleIdMap;
   const existingDynamicRules =
     await chrome.declarativeNetRequest.getDynamicRules();
   const existingRuleIds = existingDynamicRules.map((rule) => rule.id);
@@ -193,6 +223,7 @@ async function performDynamicRulesSync() {
 
 function compileDynamicRules(rules) {
   const compiled = [];
+  const ruleIdMap = new Map();
   let nextRuleId = 1;
 
   for (const rule of rules) {
@@ -206,7 +237,15 @@ function compileDynamicRules(rules) {
       continue;
     }
 
+    const sourceRuleId =
+      typeof rule?.id === "string" || typeof rule?.id === "number"
+        ? String(rule.id)
+        : null;
+
     compiled.push(buildRedirectRule(rule, condition, nextRuleId));
+    if (sourceRuleId) {
+      ruleIdMap.set(String(nextRuleId), sourceRuleId);
+    }
     nextRuleId += 1;
 
     const modifyHeadersRule = buildModifyHeadersRule(
@@ -216,11 +255,14 @@ function compileDynamicRules(rules) {
     );
     if (modifyHeadersRule) {
       compiled.push(modifyHeadersRule);
+      if (sourceRuleId) {
+        ruleIdMap.set(String(nextRuleId), sourceRuleId);
+      }
       nextRuleId += 1;
     }
   }
 
-  return compiled;
+  return { dynamicRules: compiled, ruleIdMap };
 }
 
 function buildCondition(rule) {
@@ -403,6 +445,32 @@ function normalizeCaptureCount(value) {
   return isValidCaptureCount(value) ? value : 0;
 }
 
+function isValidCaptureCountByRule(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+
+  return Object.values(value).every(isValidCaptureCount);
+}
+
+function normalizeCaptureCountByRule(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {};
+  }
+
+  const normalized = {};
+
+  for (const [ruleId, count] of Object.entries(value)) {
+    if (!ruleId || !isValidCaptureCount(count)) {
+      continue;
+    }
+
+    normalized[ruleId] = count;
+  }
+
+  return normalized;
+}
+
 function formatBadgeText(count) {
   if (count <= 0) {
     return "";
@@ -425,6 +493,20 @@ async function getCaptureCount() {
   return captureCountCache;
 }
 
+async function getCaptureCountByRule() {
+  if (captureCountByRuleCache && typeof captureCountByRuleCache === "object") {
+    return captureCountByRuleCache;
+  }
+
+  const state = await chrome.storage.local.get(
+    STORAGE_KEYS.CAPTURE_COUNT_BY_RULE,
+  );
+  captureCountByRuleCache = normalizeCaptureCountByRule(
+    state[STORAGE_KEYS.CAPTURE_COUNT_BY_RULE],
+  );
+  return captureCountByRuleCache;
+}
+
 async function getEngineEnabled() {
   if (typeof engineEnabledCache === "boolean") {
     return engineEnabledCache;
@@ -436,15 +518,33 @@ async function getEngineEnabled() {
 }
 
 function queueCaptureCountUpdate(updateFn) {
+  return queueCaptureCountersUpdate((currentState) => ({
+    count: updateFn(currentState.count),
+  }));
+}
+
+function queueCaptureCountersUpdate(updateFn) {
   captureCountWriteQueue = captureCountWriteQueue
     .catch(() => undefined)
     .then(async () => {
-      const currentCount = await getCaptureCount();
-      const nextCount = normalizeCaptureCount(updateFn(currentCount));
+      const currentState = {
+        count: await getCaptureCount(),
+        countByRule: await getCaptureCountByRule(),
+      };
+
+      const update = updateFn(currentState) || {};
+      const nextCount = normalizeCaptureCount(
+        update.count ?? currentState.count,
+      );
+      const nextCountByRule = normalizeCaptureCountByRule(
+        update.countByRule ?? currentState.countByRule,
+      );
 
       captureCountCache = nextCount;
+      captureCountByRuleCache = nextCountByRule;
       await chrome.storage.local.set({
         [STORAGE_KEYS.CAPTURE_COUNT]: nextCount,
+        [STORAGE_KEYS.CAPTURE_COUNT_BY_RULE]: nextCountByRule,
       });
       await updateActionBadge(nextCount);
 
@@ -497,16 +597,123 @@ function registerRuleMatchedListener() {
   }
 
   ruleMatchedEvent.addListener((matchInfo) => {
-    if (!shouldCountRuleMatch(matchInfo)) {
-      return;
+    void processRuleMatchEvent(matchInfo);
+  });
+}
+
+async function processRuleMatchEvent(matchInfo) {
+  if (!shouldCountRuleMatch(matchInfo)) {
+    return;
+  }
+
+  await ensureRuleMatchContextReady();
+  const sourceRuleId = resolveSourceRuleIdFromMatch(matchInfo);
+
+  await queueCaptureCountersUpdate((currentState) => {
+    const nextCountByRule = { ...currentState.countByRule };
+
+    if (sourceRuleId) {
+      const currentRuleCount = normalizeCaptureCount(
+        nextCountByRule[sourceRuleId],
+      );
+      nextCountByRule[sourceRuleId] = currentRuleCount + 1;
     }
 
-    void queueCaptureCountUpdate((currentCount) => currentCount + 1).catch(
-      (error) => {
-        console.error("Failed to increment captured calls counter:", error);
-      },
-    );
+    return {
+      count: currentState.count + 1,
+      countByRule: nextCountByRule,
+    };
+  }).catch((error) => {
+    console.error("Failed to increment captured calls counter:", error);
   });
+}
+
+async function ensureRuleMatchContextReady() {
+  if (dynamicRuleIdToSourceRuleId.size > 0 || syncedEnabledRules.length > 0) {
+    return;
+  }
+
+  if (!ensureRuleMatchContextPromise) {
+    ensureRuleMatchContextPromise = syncDynamicRules()
+      .catch((error) => {
+        console.error("Failed to initialize rule match context:", error);
+      })
+      .finally(() => {
+        ensureRuleMatchContextPromise = null;
+      });
+  }
+
+  await ensureRuleMatchContextPromise;
+}
+
+function resolveSourceRuleIdFromMatch(matchInfo) {
+  const dynamicRuleId = normalizeDynamicRuleId(matchInfo?.rule?.ruleId);
+  if (dynamicRuleId && dynamicRuleIdToSourceRuleId.has(dynamicRuleId)) {
+    return dynamicRuleIdToSourceRuleId.get(dynamicRuleId) || null;
+  }
+
+  const request = matchInfo?.request;
+  if (!request || typeof request !== "object") {
+    return null;
+  }
+
+  const requestUrl = typeof request.url === "string" ? request.url : "";
+  if (!requestUrl) {
+    return null;
+  }
+
+  const requestMethod =
+    typeof request.method === "string" ? request.method.toUpperCase() : "ANY";
+
+  for (const rule of syncedEnabledRules) {
+    if (!rule || (typeof rule.id !== "string" && typeof rule.id !== "number")) {
+      continue;
+    }
+
+    const ruleMethod =
+      typeof rule.method === "string" ? rule.method.toUpperCase() : "ANY";
+    if (ruleMethod !== "ANY" && ruleMethod !== requestMethod) {
+      continue;
+    }
+
+    if (!doesRuleUrlPatternMatchRequest(rule.urlPattern, requestUrl)) {
+      continue;
+    }
+
+    return String(rule.id);
+  }
+
+  return null;
+}
+
+function normalizeDynamicRuleId(value) {
+  if (Number.isInteger(value) && value > 0) {
+    return String(value);
+  }
+
+  if (typeof value === "string" && /^\d+$/.test(value)) {
+    return value;
+  }
+
+  return null;
+}
+
+function doesRuleUrlPatternMatchRequest(urlPattern, requestUrl) {
+  if (typeof urlPattern !== "string") {
+    return false;
+  }
+
+  const pattern = urlPattern.trim();
+  if (!pattern) {
+    return false;
+  }
+
+  try {
+    const regex = new RegExp(wildcardToRegex(pattern));
+    return regex.test(requestUrl);
+  } catch (_error) {
+    return false;
+  }
 }
 
 function shouldCountRuleMatch(matchInfo) {

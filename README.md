@@ -1,4 +1,4 @@
-# backendmocker
+# Backendmocker
 
 <p align="center">
 	<img src="icons/logo.png" alt="BackendMocker logo" width="220" />

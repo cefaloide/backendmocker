@@ -99,6 +99,7 @@ Tips:
 
 In **Configured rules**:
 
+- **Captured calls**: Shows how many matched requests each rule has intercepted.
 - **Edit**: Load rule into form, change fields, save.
 - **Enable/Disable**: Toggle a single rule without deleting it.
 - **Delete**: Permanently remove the rule.
