@@ -143,17 +143,17 @@ function renderRulesTable() {
           <td class="px-4 py-3 align-top">
             <p class="text-sm">HTTP ${safeStatus}</p>
           </td>
-          <td class="px-4 py-3 align-top">
+          <td class="px-4 py-3 align-top text-center">
             <span class="inline-flex items-center rounded-full px-2.5 py-1 text-xs font-medium ${
               isEnabled
-                ? "bg-emerald-100 text-emerald-700"
-                : "bg-slate-200 text-slate-700"
+                ? "bg-green-100 text-emerald-700"
+                : "bg-gray-200 text-slate-700"
             }">
               ${isEnabled ? "Enabled" : "Disabled"}
             </span>
           </td>
           <td class="px-4 py-3 align-top text-right">
-            <div class="inline-flex flex-wrap justify-end gap-2">
+            <div class="flex flex-col gap-2">
               <button
                 type="button"
                 data-action="edit"
