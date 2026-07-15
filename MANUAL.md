@@ -1,7 +1,7 @@
 # BackendMocker User Manual
 
 <p align="center">
-  <img src="icons/logo.png" alt="BackendMocker logo" width="220" />
+  <img src="icons/logo220.png" alt="BackendMocker logo" width="220" />
 </p>
 
 BackendMocker is a Chrome extension that intercepts matching requests and

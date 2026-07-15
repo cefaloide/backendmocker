@@ -1,7 +1,7 @@
 # Backendmocker
 
 <p align="center">
-	<img src="icons/logo.png" alt="BackendMocker logo" width="220" />
+	<img src="icons/logo220.png" alt="BackendMocker logo" width="220" />
 </p>
 
 Chrome Extension (Manifest V3) that mocks HTTP API responses in-browser using
