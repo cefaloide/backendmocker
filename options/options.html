@@ -161,8 +161,25 @@
       </section>
 
       <section class="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden">
-        <div class="border-b border-slate-200 px-6 py-4">
+        <div class="border-b border-slate-200 px-6 py-4 flex flex-wrap items-center justify-between gap-3">
           <h2 class="text-lg font-medium">Configured rules</h2>
+          <div class="flex items-center gap-2">
+            <button
+              id="exportRules"
+              type="button"
+              class="rounded-md border border-slate-300 px-3 py-1.5 text-xs font-medium hover:bg-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
+            >
+              Export rules
+            </button>
+            <button
+              id="importRules"
+              type="button"
+              class="rounded-md border border-slate-300 px-3 py-1.5 text-xs font-medium hover:bg-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
+            >
+              Import rules
+            </button>
+            <input id="importFileInput" type="file" accept="application/json" class="hidden" />
+          </div>
         </div>
 
         <div class="overflow-x-auto">

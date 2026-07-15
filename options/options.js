@@ -4,6 +4,17 @@ const STORAGE_KEYS = {
   CAPTURE_COUNT_BY_RULE: "capturedCallsCountByRule",
 };
 
+const ALLOWED_METHODS = new Set([
+  "ANY",
+  "GET",
+  "POST",
+  "PUT",
+  "PATCH",
+  "DELETE",
+  "HEAD",
+  "OPTIONS",
+]);
+
 const state = {
   rules: [],
   editingRuleId: null,
@@ -48,12 +59,18 @@ function cacheElements() {
   elements.body = document.getElementById("body");
   elements.cancelEdit = document.getElementById("cancelEdit");
   elements.rulesTableBody = document.getElementById("rulesTableBody");
+  elements.exportRules = document.getElementById("exportRules");
+  elements.importRules = document.getElementById("importRules");
+  elements.importFileInput = document.getElementById("importFileInput");
 }
 
 function wireEvents() {
   elements.ruleForm.addEventListener("submit", onSubmitRuleForm);
   elements.cancelEdit.addEventListener("click", resetForm);
   elements.rulesTableBody.addEventListener("click", onRulesTableClick);
+  elements.exportRules.addEventListener("click", onExportRules);
+  elements.importRules.addEventListener("click", onImportRulesClick);
+  elements.importFileInput.addEventListener("change", onImportFileChange);
 }
 
 async function loadState() {
@@ -76,6 +93,18 @@ function render() {
   renderEngineHint();
   renderRulesTable();
   renderFormMode();
+  renderImportExportButtons();
+}
+
+function renderImportExportButtons() {
+  const hasRules = state.rules.length > 0;
+  elements.exportRules.disabled = !hasRules;
+
+  if (hasRules) {
+    elements.exportRules.classList.remove("opacity-60", "cursor-not-allowed");
+  } else {
+    elements.exportRules.classList.add("opacity-60", "cursor-not-allowed");
+  }
 }
 
 function renderEngineHint() {
@@ -360,6 +389,232 @@ async function saveRules() {
   });
 
   await chrome.runtime.sendMessage({ type: "SYNC_RULES" });
+}
+
+async function onExportRules() {
+  clearError();
+
+  if (state.rules.length === 0) {
+    showError("No rules available to export.");
+    return;
+  }
+
+  if (
+    typeof Blob === "undefined" ||
+    typeof URL === "undefined" ||
+    typeof URL.createObjectURL !== "function"
+  ) {
+    showError("Export is not supported in this environment.");
+    return;
+  }
+
+  const exportPayload = {
+    version: 1,
+    exportedAt: new Date().toISOString(),
+    rules: state.rules,
+  };
+  const exportJson = JSON.stringify(exportPayload, null, 2);
+  const blob = new Blob([exportJson], { type: "application/json" });
+  const safeTimestamp = new Date().toISOString().replace(/[:.]/g, "-");
+  let fileUrl = "";
+
+  try {
+    fileUrl = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+
+    link.href = fileUrl;
+    link.download = `backendmocker-rules-${safeTimestamp}.json`;
+    link.click();
+  } catch (_error) {
+    showError("Could not export rules file.");
+  } finally {
+    if (fileUrl && typeof URL.revokeObjectURL === "function") {
+      URL.revokeObjectURL(fileUrl);
+    }
+  }
+}
+
+function onImportRulesClick() {
+  clearError();
+  elements.importFileInput.value = "";
+  elements.importFileInput.click();
+}
+
+async function onImportFileChange(event) {
+  clearError();
+
+  const selectedFile = event.target?.files?.[0];
+  if (!selectedFile) {
+    return;
+  }
+
+  try {
+    const rawContent = await readFileContent(selectedFile);
+    const parsedContent = JSON.parse(rawContent);
+    const importedRules = extractImportedRules(parsedContent);
+
+    if (importedRules.length === 0) {
+      showError("The selected file does not contain any rules.");
+      return;
+    }
+
+    const shouldReplace = confirm(
+      `Import ${importedRules.length} rule(s) and replace ${state.rules.length} current rule(s)? This cannot be undone.`,
+    );
+
+    if (!shouldReplace) {
+      return;
+    }
+
+    state.rules = normalizeImportedRules(importedRules);
+    await saveRules();
+    resetForm();
+    render();
+
+    if (typeof alert === "function") {
+      alert(`Imported ${state.rules.length} rule(s).`);
+    }
+  } catch (error) {
+    showError(error?.message || "Could not import the selected rules file.");
+  } finally {
+    elements.importFileInput.value = "";
+  }
+}
+
+async function readFileContent(file) {
+  if (typeof file.text === "function") {
+    return file.text();
+  }
+
+  if (typeof FileReader !== "undefined") {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result || ""));
+      reader.onerror = () => reject(new Error("Could not read selected file."));
+      reader.readAsText(file);
+    });
+  }
+
+  throw new Error("Could not read selected file.");
+}
+
+function extractImportedRules(parsedContent) {
+  if (Array.isArray(parsedContent)) {
+    return parsedContent;
+  }
+
+  if (
+    parsedContent &&
+    typeof parsedContent === "object" &&
+    Array.isArray(parsedContent.rules)
+  ) {
+    return parsedContent.rules;
+  }
+
+  throw new Error(
+    "Invalid import format. Expected a JSON array or object with a rules array.",
+  );
+}
+
+function normalizeImportedRules(importedRules) {
+  const seenRuleIds = new Set();
+  return importedRules.map((rule, index) =>
+    normalizeImportedRule(rule, index, seenRuleIds),
+  );
+}
+
+function normalizeImportedRule(rule, index, seenRuleIds) {
+  if (!rule || typeof rule !== "object" || Array.isArray(rule)) {
+    throw new Error(`Rule #${index + 1} is not a valid object.`);
+  }
+
+  const urlPattern = String(rule.urlPattern || "").trim();
+  if (!urlPattern) {
+    throw new Error(`Rule #${index + 1} is missing urlPattern.`);
+  }
+
+  const method = normalizeRuleMethod(rule.method);
+  const statusCode = normalizeRuleStatusCode(rule.statusCode, index);
+  const responseHeaders = normalizeRuleHeaders(rule.responseHeaders, index);
+  const now = new Date().toISOString();
+
+  const rawId = typeof rule.id === "string" ? rule.id.trim() : "";
+  const uniqueId = rawId && !seenRuleIds.has(rawId) ? rawId : generateRuleId();
+  seenRuleIds.add(uniqueId);
+
+  const displayName =
+    typeof rule.name === "string" && rule.name.trim()
+      ? rule.name.trim()
+      : `${method} ${urlPattern}`;
+
+  const body =
+    typeof rule.body === "string"
+      ? rule.body
+      : rule.body == null
+        ? ""
+        : JSON.stringify(rule.body);
+
+  const createdAt =
+    typeof rule.createdAt === "string" && rule.createdAt ? rule.createdAt : now;
+  const updatedAt =
+    typeof rule.updatedAt === "string" && rule.updatedAt ? rule.updatedAt : now;
+
+  return {
+    id: uniqueId,
+    name: displayName,
+    method,
+    urlPattern,
+    statusCode,
+    responseHeaders,
+    body,
+    enabled: rule.enabled !== false,
+    createdAt,
+    updatedAt,
+  };
+}
+
+function normalizeRuleMethod(method) {
+  const normalizedMethod = String(method || "ANY").toUpperCase();
+  return ALLOWED_METHODS.has(normalizedMethod) ? normalizedMethod : "ANY";
+}
+
+function normalizeRuleStatusCode(statusCode, ruleIndex) {
+  const normalizedStatusCode = Number(statusCode);
+
+  if (
+    !Number.isInteger(normalizedStatusCode) ||
+    normalizedStatusCode < 100 ||
+    normalizedStatusCode > 599
+  ) {
+    throw new Error(
+      `Rule #${ruleIndex + 1} has an invalid statusCode. Expected an integer between 100 and 599.`,
+    );
+  }
+
+  return normalizedStatusCode;
+}
+
+function normalizeRuleHeaders(headers, ruleIndex) {
+  if (headers == null) {
+    return {};
+  }
+
+  if (!headers || typeof headers !== "object" || Array.isArray(headers)) {
+    throw new Error(`Rule #${ruleIndex + 1} has invalid responseHeaders.`);
+  }
+
+  const normalizedHeaders = {};
+
+  for (const [key, value] of Object.entries(headers)) {
+    const headerName = String(key).trim();
+    if (!headerName) {
+      continue;
+    }
+
+    normalizedHeaders[headerName] = String(value);
+  }
+
+  return normalizedHeaders;
 }
 
 function showError(message) {

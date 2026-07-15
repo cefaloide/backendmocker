@@ -11,6 +11,8 @@ dynamic `chrome.declarativeNetRequest` rules.
 
 - Create/edit/delete mock rules in Options dashboard
 - Enable/disable individual rules
+- Export configured rules to JSON
+- Import configured rules from JSON
 - Global on/off switch in popup
 - Rule matching by wildcard URL pattern + HTTP method
 - Mock payload redirection through Data URLs

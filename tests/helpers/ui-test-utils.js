@@ -64,6 +64,7 @@ function createElement(id) {
       return attributes.get(name);
     },
     focus() {},
+    click() {},
     reset() {
       element.value = "";
     },
@@ -96,6 +97,9 @@ function createDocumentMock(elementIds) {
   const document = {
     getElementById(id) {
       return elements[id] || null;
+    },
+    createElement(tagName) {
+      return createElement(String(tagName));
     },
     addEventListener(eventName, handler) {
       const handlers = listeners.get(eventName) || [];
@@ -198,7 +202,6 @@ function createChromeMock({
 function loadScriptInVm({ scriptPath, contextValues }) {
   const code = fs.readFileSync(scriptPath, "utf8");
   const context = {
-    ...contextValues,
     console,
     Date,
     Math,
@@ -220,6 +223,8 @@ function loadScriptInVm({ scriptPath, contextValues }) {
     confirm() {
       return true;
     },
+    alert() {},
+    ...contextValues,
   };
 
   vm.createContext(context);

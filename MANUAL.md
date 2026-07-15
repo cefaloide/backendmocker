@@ -104,14 +104,32 @@ In **Configured rules**:
 - **Enable/Disable**: Toggle a single rule without deleting it.
 - **Delete**: Permanently remove the rule.
 
-## 8. Global engine toggle behavior
+## 8. Export and import configured rules
+
+Use these actions in the **Configured rules** header:
+
+- **Export rules**: Downloads all current rules as a JSON file.
+- **Import rules**: Loads rules from a JSON file and replaces existing rules.
+
+Supported import formats:
+
+- JSON array of rule objects.
+- JSON object with a `rules` array.
+
+Important:
+
+- Import replaces all currently configured rules after confirmation.
+- If a rule in the import file has invalid structure (for example missing
+  `urlPattern` or invalid `statusCode`), import is rejected with an error.
+
+## 9. Global engine toggle behavior
 
 The popup switch controls all rules at once:
 
 - **Enabled**: All enabled rules are applied.
 - **Disabled**: No rules are applied, even if individual rules are enabled.
 
-## 9. Response details and limitations
+## 10. Response details and limitations
 
 BackendMocker uses Manifest V3 declarativeNetRequest redirects to `data:` URLs.
 
@@ -123,7 +141,7 @@ What this means:
 - If status is not `200`, the extension exposes intended status through:
   `x-backendmocker-intended-status`.
 
-## 10. Troubleshooting
+## 11. Troubleshooting
 
 If a mock is not applying:
 
@@ -140,7 +158,7 @@ If your rule still does not match:
 - Inspect the exact request URL in DevTools and compare character by character.
 - Ensure the request type is one the extension handles (navigation/subframe/XHR).
 
-## 11. Best practices
+## 12. Best practices
 
 - Keep rules specific to avoid accidental matches.
 - Add clear names so teams understand each mock quickly.
