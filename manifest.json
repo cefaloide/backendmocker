@@ -2,12 +2,13 @@
   "manifest_version": 3,
   "name": "BackendMocker",
   "description": "Mock API responses directly in Chrome with configurable rules.",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "permissions": [
     "declarativeNetRequest",
     "declarativeNetRequestWithHostAccess",
     "declarativeNetRequestFeedback",
-    "storage"
+    "storage",
+    "webRequest"
   ],
   "host_permissions": [
     "<all_urls>"

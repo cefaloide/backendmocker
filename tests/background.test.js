@@ -63,13 +63,14 @@ function createStorageArea(store, onChangedEvent) {
   };
 }
 
-function createChromeMock(initialStore = {}) {
+function createChromeMock(initialStore = {}, { withWebRequest = false } = {}) {
   const store = { ...initialStore };
   const onInstalled = createEvent();
   const onStartup = createEvent();
   const onMessage = createEvent();
   const onStorageChanged = createEvent();
   const onRuleMatchedDebug = createEvent();
+  const onBeforeRequest = createEvent();
 
   let dynamicRules = [];
 
@@ -98,6 +99,7 @@ function createChromeMock(initialStore = {}) {
           .concat(addRules);
       },
     },
+    webRequest: withWebRequest ? { onBeforeRequest } : undefined,
     action: {
       async setIcon() {},
       async setBadgeText() {},
@@ -114,6 +116,7 @@ function createChromeMock(initialStore = {}) {
       onMessage,
       onStorageChanged,
       onRuleMatchedDebug,
+      onBeforeRequest,
     },
   };
 }
@@ -123,8 +126,8 @@ function getProjectBackgroundSource() {
   return fs.readFileSync(backgroundPath, "utf8");
 }
 
-function loadBackgroundForTest(initialStore = {}) {
-  const { chrome, store, events } = createChromeMock(initialStore);
+function loadBackgroundForTest(initialStore = {}, mockOptions = {}) {
+  const { chrome, store, events } = createChromeMock(initialStore, mockOptions);
 
   const context = {
     chrome,
@@ -438,6 +441,53 @@ test("duplicate requestId matches are deduped and counted once", async () => {
 
   await context.processRuleMatchEvent(repeatedMatch);
   await context.processRuleMatchEvent(repeatedMatch);
+
+  assert.equal(store.capturedCallsCount, 1);
+  assert.deepEqual(toPlainJson(store.capturedCallsCountByRule), {
+    "rule-a": 1,
+  });
+});
+
+test("packed builds without onRuleMatchedDebug count matches via webRequest", async () => {
+  const initialStore = {
+    mockRules: [
+      {
+        id: "rule-a",
+        name: "Rule A",
+        enabled: true,
+        method: "GET",
+        urlPattern: "https://api.example.com/a/*",
+        statusCode: 200,
+      },
+    ],
+    engineEnabled: true,
+    capturedCallsCount: 0,
+    capturedCallsCountByRule: {},
+  };
+
+  const { context, store, events } = loadBackgroundForTest(initialStore, {
+    withWebRequest: true,
+  });
+
+  assert.equal(events.onRuleMatchedDebug.listeners.length, 0);
+  assert.equal(events.onBeforeRequest.listeners.length, 1);
+
+  await context.processWebRequestEvent({
+    requestId: "req-1",
+    tabId: 1,
+    frameId: 0,
+    url: "https://api.example.com/a/123",
+    method: "GET",
+    timeStamp: Date.now(),
+  });
+  await context.processWebRequestEvent({
+    requestId: "req-2",
+    tabId: 1,
+    frameId: 0,
+    url: "https://api.example.com/other",
+    method: "GET",
+    timeStamp: Date.now(),
+  });
 
   assert.equal(store.capturedCallsCount, 1);
   assert.deepEqual(toPlainJson(store.capturedCallsCountByRule), {

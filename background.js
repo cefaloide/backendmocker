@@ -20,6 +20,7 @@ let engineEnabledCache = null;
 let dynamicRuleIdToSourceRuleId = new Map();
 let syncedEnabledRules = [];
 let ensureRuleMatchContextPromise = null;
+let ruleMatchContextLoaded = false;
 
 const recentMatchedRequests = new Map();
 
@@ -211,6 +212,7 @@ async function performDynamicRulesSync() {
 
   const { dynamicRules, ruleIdMap } = compileDynamicRules(enabledRules);
   dynamicRuleIdToSourceRuleId = ruleIdMap;
+  ruleMatchContextLoaded = true;
   const existingDynamicRules =
     await chrome.declarativeNetRequest.getDynamicRules();
   const existingRuleIds = existingDynamicRules.map((rule) => rule.id);
@@ -591,6 +593,19 @@ async function initializeActionBadge() {
 }
 
 function registerRuleMatchedListener() {
+  // onRuleMatchedDebug is only available for unpacked extensions, so packed
+  // (Chrome Web Store) builds observe requests through webRequest instead.
+  const beforeRequestEvent = chrome.webRequest?.onBeforeRequest;
+  if (beforeRequestEvent) {
+    beforeRequestEvent.addListener(
+      (details) => {
+        void processWebRequestEvent(details);
+      },
+      { urls: ["<all_urls>"], types: SUPPORTED_RESOURCE_TYPES },
+    );
+    return;
+  }
+
   const ruleMatchedEvent = chrome.declarativeNetRequest?.onRuleMatchedDebug;
   if (!ruleMatchedEvent) {
     return;
@@ -599,6 +614,17 @@ function registerRuleMatchedListener() {
   ruleMatchedEvent.addListener((matchInfo) => {
     void processRuleMatchEvent(matchInfo);
   });
+}
+
+async function processWebRequestEvent(details) {
+  await ensureRuleMatchContextReady();
+
+  const matchInfo = { request: details, timeStamp: details?.timeStamp };
+  if (!resolveSourceRuleIdFromMatch(matchInfo)) {
+    return;
+  }
+
+  await processRuleMatchEvent(matchInfo);
 }
 
 async function processRuleMatchEvent(matchInfo) {
@@ -629,7 +655,7 @@ async function processRuleMatchEvent(matchInfo) {
 }
 
 async function ensureRuleMatchContextReady() {
-  if (dynamicRuleIdToSourceRuleId.size > 0 || syncedEnabledRules.length > 0) {
+  if (ruleMatchContextLoaded) {
     return;
   }
 
